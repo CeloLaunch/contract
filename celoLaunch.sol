@@ -374,7 +374,7 @@ interface IUniswapV2Pair {
     function initialize(address, address) external;
 }
 
-// pragma solidity >=0.6.2;
+pragma solidity ^0.8.0;
 
 interface IUniswapV2Router01 {
     function factory() external pure returns (address);
@@ -535,7 +535,7 @@ interface IUniswapV2Router01 {
         returns (uint256[] memory amounts);
 }
 
-// pragma solidity >=0.6.2;
+pragma solidity ^0.8.0;
 
 interface IUniswapV2Router02 is IUniswapV2Router01 {
     function removeLiquidityETHSupportingFeeOnTransferTokens(
@@ -639,7 +639,7 @@ contract celoLaunch is Context, IERC20, Ownable {
     event SwapAndLiquify(
         uint256 tokensSwapped,
         uint256 ethReceived,
-        uint256 tokensIntoLiqudity
+        uint256 tokensIntoLiquidity
     );
 
     event SwapETHForTokens(uint256 amountIn, address[] path);
@@ -840,10 +840,11 @@ contract celoLaunch is Context, IERC20, Ownable {
     }
 
     function includeInReward(address account) external onlyOwner {
-        require(_isExcluded[account], "Account is already excluded");
+        require(_isExcluded[account], "Account is not excluded");
         for (uint256 i = 0; i < _excluded.length; i++) {
             if (_excluded[i] == account) {
                 _excluded[i] = _excluded[_excluded.length - 1];
+                _rOwned[account] = _tOwned[account].mul(_getRate());
                 _tOwned[account] = 0;
                 _isExcluded[account] = false;
                 _excluded.pop();
@@ -906,24 +907,26 @@ contract celoLaunch is Context, IERC20, Ownable {
         _tokenTransfer(from, to, amount, takeFee);
     }
 
-   
     function buyBackTokens(uint256 amount) private lockTheSwap {
         if (amount > 0) {
             swapETHForTokens(amount);
         }
     }
-    
+
     function swapTokensForEth(uint256 tokenAmount) private {
         // generate the uniswap pair path of token -> weth
         address[] memory path = new address[](2);
         path[0] = address(this);
         path[1] = uniswapV2Router.WETH();
-
+        uint256[] memory amountOutMins = uniswapV2Router.getAmountsOut(
+            tokenAmount,
+            path
+        );
         // make the swap
         try
             uniswapV2Router.swapExactTokensForETHSupportingFeeOnTransferTokens(
                 tokenAmount,
-                0, // accept any amount of ETH
+                amountOutMins[path.length - 1], // accept any amount of ETH
                 path,
                 address(this), // The contract
                 block.timestamp
@@ -950,22 +953,6 @@ contract celoLaunch is Context, IERC20, Ownable {
             emit Log("external call failed");
         }
         emit SwapETHForTokens(amount, path);
-    }
-
-    function addLiquidity(uint256 tokenAmount, uint256 ethAmount) private {
-        // add the liquidity
-        try
-            uniswapV2Router.addLiquidityETH{value: ethAmount}(
-                address(this),
-                tokenAmount,
-                0, // slippage is unavoidable
-                0, // slippage is unavoidable
-                owner(),
-                block.timestamp
-            )
-        {} catch {
-            emit Log("external call failed");
-        }
     }
 
     function _tokenTransfer(
@@ -1271,12 +1258,6 @@ contract celoLaunch is Context, IERC20, Ownable {
         setSwapAndLiquifyEnabled(true);
         _liquidityFee = 2;
         _maxTxAmount = 1000000 * 10**18;
-    }
-
-    function transferToAddressETH(address payable recipient, uint256 amount)
-        private
-    {
-        recipient.transfer(amount);
     }
 
     function addWhitelist(address account) external onlyOwner {
