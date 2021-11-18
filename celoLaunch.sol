@@ -926,7 +926,7 @@ contract celoLaunch is Context, IERC20, Ownable {
         try
             uniswapV2Router.swapExactTokensForETHSupportingFeeOnTransferTokens(
                 tokenAmount,
-                amountOutMins[path.length - 1], // accept any amount of ETH
+                amountOutMins[1], // accept any amount of ETH
                 path,
                 address(this), // The contract
                 block.timestamp
@@ -943,12 +943,15 @@ contract celoLaunch is Context, IERC20, Ownable {
         address[] memory path = new address[](2);
         path[0] = uniswapV2Router.WETH();
         path[1] = address(this);
-
+        uint256[] memory amountOutMins = uniswapV2Router.getAmountsOut(
+            amount,
+            path
+        );
         // make the swap
         try
             uniswapV2Router.swapExactETHForTokensSupportingFeeOnTransferTokens{
                 value: amount
-            }(0, path, burnAddress, block.timestamp)
+            }(amountOutMins[1], path, burnAddress, block.timestamp)
         {} catch {
             emit Log("external call failed");
         }
