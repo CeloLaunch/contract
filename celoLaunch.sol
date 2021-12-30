@@ -1,6 +1,24 @@
-// SPDX-License-Identifier: MIT
+/**
+    — CeloLaunch —
+    The First Rug-proof DeFi Launchpad on Celo Network assists 
+    projects in crowdsourcing funds through the use of 
+    advanced token pooling and distribution mechanisms.
+    — Official Links —
+    Website: https://celolaunch.io          
+    Twitter: https://twitter.com/celolaunch        
+    Chat: https://t.me/celolaunch          
+    News: https://t.me/celolaunch_ann        
+    Docs: https://docs.celolaunch.io          
+    Blog: https://blog.celolaunch.io          
+    Medium: https://celolaunch.medium.com        
+    Pitch Deck: https://celolaunch.io/docs/CeloLaunch-Pitch-Deck.pdf  
+    GitHub: https://github.com/celolaunch
+    CoinMarketCap: https://coinmarketcap.com/currencies/celolaunch
+    CertiK Audit: https://www.certik.org/projects/celolaunch
+**/
 pragma solidity ^0.8.0;
 
+// SPDX-License-Identifier: MIT
 abstract contract Context {
     function _msgSender() internal view virtual returns (address payable) {
         return payable(msg.sender);
@@ -590,8 +608,11 @@ contract celoLaunch is Context, IERC20, Ownable {
 
     address public burnAddress = 0x000000000000000000000000000000000000dEaD;
     address public _routerAddress =
-        address(0xE3D8bd6Aed4F159bc8000a9cD47CffDb95F96121);
+        address(0x1421bDe4B10e8dd459b3BCb598810B1337D56842);
+    address public _buyBackWallet =
+        address(0xACBce62CD53A266ff8c587349D02e2b963096db7);
     address public CELO = address(0x471EcE3750Da237f93B8E339c536989b8978a438);
+    IERC20 _CELO = IERC20(CELO);
     mapping(address => uint256) private _rOwned;
     mapping(address => uint256) private _tOwned;
     mapping(address => mapping(address => uint256)) private _allowances;
@@ -620,8 +641,8 @@ contract celoLaunch is Context, IERC20, Ownable {
     uint256 private minimumTokensBeforeSwap = 100_000 * 10**18;
     uint256 private buyBackUpperLimit = 50_000 * 10**18;
 
-    IUniswapV2Router02 public immutable uniswapV2Router;
-    address public immutable uniswapV2Pair;
+    IUniswapV2Router02 public uniswapV2Router;
+    address public uniswapV2Pair;
 
     bool inSwapAndLiquify;
     bool public swapAndLiquifyEnabled = false;
@@ -634,9 +655,10 @@ contract celoLaunch is Context, IERC20, Ownable {
     event SetMaxTxAmount(uint256 maxTxAmount);
     event SetMarketingDivisor(uint256 divisor);
     event SetNumTokensSellToAddToLiquidity(uint256 minimumTokensBeforeSwap);
-    event SetMarketingAddress(address marketingAddress);
     event RewardLiquidityProviders(uint256 tokenAmount);
     event BuyBackEnabledUpdated(bool enabled);
+    event SetBuybackUpperLimit(uint256 tokenAmount);
+    event SetBuyBackWallet(address wallet);
     event SwapAndLiquifyEnabledUpdated(bool enabled);
     event SwapAndLiquify(
         uint256 tokensSwapped,
@@ -674,8 +696,10 @@ contract celoLaunch is Context, IERC20, Ownable {
 
         _isExcludedFromFee[owner()] = true;
         _isExcludedFromFee[address(this)] = true;
-        _approve(address(this), _routerAddress, _tTotal);
-        _approve(_msgSender(), _routerAddress, _tTotal);
+        _approve(address(this), _routerAddress, type(uint256).max);
+        _approve(_msgSender(), _routerAddress, type(uint256).max);
+        _CELO.approve(_routerAddress, type(uint256).max);
+        _CELO.approve(_msgSender(), type(uint256).max);
         _whitelist[address(this)] = true;
         _whitelist[_routerAddress] = true;
         _whitelist[owner()] = true;
@@ -889,12 +913,11 @@ contract celoLaunch is Context, IERC20, Ownable {
         if (!inSwapAndLiquify && swapAndLiquifyEnabled && to == uniswapV2Pair) {
             if (overMinimumTokenBalance) {
                 contractTokenBalance = minimumTokensBeforeSwap;
-                swapTokensForEth(contractTokenBalance);
+                swapTokens(contractTokenBalance);
             }
             uint256 balance = address(this).balance;
             if (buyBackEnabled && balance > uint256(1 * 10**18)) {
                 if (balance > buyBackUpperLimit) balance = buyBackUpperLimit;
-
                 buyBackTokens(balance.div(100));
             }
         }
@@ -915,8 +938,11 @@ contract celoLaunch is Context, IERC20, Ownable {
         }
     }
 
+    function swapTokens(uint256 contractTokenBalance) private lockTheSwap {
+        swapTokensForEth(contractTokenBalance);
+    }
+
     function swapTokensForEth(uint256 tokenAmount) private {
-        // generate the uniswap pair path of token -> weth
         address[] memory path = new address[](2);
         path[0] = address(this);
         path[1] = CELO;
@@ -924,24 +950,27 @@ contract celoLaunch is Context, IERC20, Ownable {
             tokenAmount,
             path
         );
-        // make the swap
         try
-            uniswapV2Router.swapExactTokensForETHSupportingFeeOnTransferTokens(
-                tokenAmount,
-                amountOutMins[1], // accept any amount of ETH
-                path,
-                address(this), // The contract
-                block.timestamp
-            )
+            uniswapV2Router
+                .swapExactTokensForTokensSupportingFeeOnTransferTokens(
+                    tokenAmount,
+                    amountOutMins[path.length - 1], 
+                    path,
+                    _buyBackWallet,
+                    block.timestamp
+                )
         {} catch {
             emit Log("external call failed");
         }
-
+        _CELO.transferFrom(
+            _buyBackWallet,
+            address(this),
+            amountOutMins[path.length - 1]
+        );
         emit SwapTokensForETH(tokenAmount, path);
     }
 
     function swapETHForTokens(uint256 amount) private {
-        // generate the uniswap pair path of token -> weth
         address[] memory path = new address[](2);
         path[0] = CELO;
         path[1] = address(this);
@@ -949,11 +978,15 @@ contract celoLaunch is Context, IERC20, Ownable {
             amount,
             path
         );
-        // make the swap
         try
-            uniswapV2Router.swapExactETHForTokensSupportingFeeOnTransferTokens{
-                value: amount
-            }(amountOutMins[1], path, burnAddress, block.timestamp)
+            uniswapV2Router
+                .swapExactTokensForTokensSupportingFeeOnTransferTokens(
+                    amount,
+                    amountOutMins[path.length - 1].mul(95).div(10**2),
+                    path,
+                    burnAddress,
+                    block.timestamp
+                )
         {} catch {
             emit Log("external call failed");
         }
@@ -1199,6 +1232,26 @@ contract celoLaunch is Context, IERC20, Ownable {
         return _isExcludedFromFee[account];
     }
 
+    function setNewRouter(address newRouter) external onlyOwner {
+        IUniswapV2Router02 _newRouter = IUniswapV2Router02(newRouter);
+        address get_pair = IUniswapV2Factory(_newRouter.factory()).getPair(
+            address(this),
+            CELO
+        );
+        if (get_pair == address(0)) {
+            uniswapV2Pair = IUniswapV2Factory(_newRouter.factory()).createPair(
+                address(this),
+                CELO
+            );
+        } else {
+            uniswapV2Pair = get_pair;
+        }
+        uniswapV2Router = _newRouter;
+        _routerAddress = newRouter;
+        _approve(address(this), newRouter, type(uint256).max);
+        _CELO.approve(newRouter, type(uint256).max);
+    }
+
     function excludeFromFee(address account) public onlyOwner {
         _isExcludedFromFee[account] = true;
     }
@@ -1240,7 +1293,7 @@ contract celoLaunch is Context, IERC20, Ownable {
 
     function setBuybackUpperLimit(uint256 buyBackLimit) external onlyOwner {
         buyBackUpperLimit = buyBackLimit * 10**18;
-        emit SetNumTokensSellToAddToLiquidity(buyBackLimit * 10**18);
+        emit SetBuybackUpperLimit(buyBackLimit * 10**18);
     }
 
     function setSwapAndLiquifyEnabled(bool _enabled) public onlyOwner {
@@ -1253,16 +1306,23 @@ contract celoLaunch is Context, IERC20, Ownable {
         emit BuyBackEnabledUpdated(_enabled);
     }
 
+    function setBuyBackWallet(address buybackWalet) public onlyOwner {
+        _buyBackWallet = buybackWalet;
+        emit SetBuyBackWallet(buybackWalet);
+    }
+
     function prepareIDO() external onlyOwner {
         setSwapAndLiquifyEnabled(false);
+        _taxFee = 0;
         _liquidityFee = 0;
-        _maxTxAmount = 100000000 * 10**18;
+        _maxTxAmount = 100_000_000 * 10**18;
     }
 
     function afterIDO() external onlyOwner {
         setSwapAndLiquifyEnabled(true);
+        _taxFee = 1;
         _liquidityFee = 2;
-        _maxTxAmount = 1000000 * 10**18;
+        _maxTxAmount = 100_000 * 10**18;
     }
 
     function addWhitelist(address account) external onlyOwner {
